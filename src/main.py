@@ -3,6 +3,7 @@ import jwt
 from flask import Flask, request, jsonify
 import threading
 import os
+import bcrypt
 
 app = Flask(__name__)
 
@@ -21,16 +22,15 @@ cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
-    password TEXT
+    password TEXT,
+    estado TEXT
 )''')
 conn.commit()
 
 # Generate JWT token
 def generate_token(username):
-    # secret_key = os.environ.get('LOKOUT')
-    # if not secret_key:
-    #     raise ValueError('LOKOUT environment variable is not set')
-    secret_key = 'LOKOUT'
+    secret_key = os.environ.get('JWT_SECRET_KEY')
+    # secret_key = 'LOKOUT'
     token = jwt.encode({'username': username}, secret_key, algorithm='HS256')
     return token
 
@@ -40,32 +40,45 @@ def login():
     data = request.get_json()
     username = data['username']
     password = data['password']
+
     # Check if user exists
-    cursor.execute('SELECT * FROM users WHERE username=? AND password=?', (username, password))
-    user = cursor.fetchone()
-    if user:
-        # Generate JWT token
-        token = generate_token(username)
-        return jsonify({'token': token})
+    cursor.execute('SELECT password FROM users WHERE username=?', (username,))
+    result = cursor.fetchone()
+
+    if result:
+        hashed_password = result[0]
+
+        # Verify the password
+        if bcrypt.checkpw(password.encode('utf-8'), hashed_password):
+            # Generate JWT token
+            token = generate_token(username)
+            return jsonify({'token': token})
+        else:
+            return jsonify({'error': 'Invalid username or password'}), 401
     else:
         return jsonify({'error': 'Invalid username or password'}), 401
-        
+
 @app.route('/register', methods=['POST'])
 def register():
     conn, cursor = get_db()
     data = request.get_json()
     username = data['username']
     password = data['password']
-    # Comprobar si el nombre de usuario ya existe
+
+    # Verificar si el nombre de usuario ya existe
     cursor.execute('SELECT * FROM users WHERE username=?', (username,))
     existing_user = cursor.fetchone()
-    if not existing_user:
-        # Insertar nuevo usuario en la base de datos
-        cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
-        conn.commit()
-        return jsonify({'message': 'Usuario registrado correctamente'})
-    else:
+    if existing_user:
         return jsonify({'error': 'El nombre de usuario ya existe'}), 409
+
+    # Encriptar la contraseña usando bcrypt
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
+
+    # Insertar nuevo usuario en la base de datos
+    cursor.execute('INSERT INTO users (username, password, estado) VALUES (?, ?, ?)', (username, hashed_password, 'A'))
+    conn.commit()
+    return jsonify({'message': 'Usuario registrado correctamente'})
 
 if __name__ == '__main__':
     app.run(debug=True)
